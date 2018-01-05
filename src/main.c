@@ -88,9 +88,13 @@ int main(void)
 	/* Infinite loop */
 	while (1)
 	{
-		NVIC_DisableIRQ(USART1_IRQn);
-		LCD_DisplayWholeString(0, NMEA_string);
-		NVIC_EnableIRQ(USART1_IRQn);
+		if (NMEA_StringReadyFlag)
+		{
+			NVIC_DisableIRQ(USART1_IRQn);
+			LCD_DisplayWholeString(0, NMEA_string);
+			NMEA_StringReadyFlag = 0;
+			NVIC_EnableIRQ(USART1_IRQn);
+		}
 	}
 }
 
