@@ -34,9 +34,24 @@ SOFTWARE.
 #include "stm32f429i_discovery_lcd.h"
 
 /* Private macro */
+#define NMEA_stringlength	79
 /* Private variables */
+char NMEA_string[NMEA_stringlength];
+/*static struct
+{
+	char GGA[NMEA_stringlength];
+	char GLL[NMEA_stringlength];
+	char GSA[NMEA_stringlength];
+	char GSV[NMEA_stringlength];
+	char RMC[NMEA_stringlength];
+	char VTG[NMEA_stringlength];
+	char ZDA[NMEA_stringlength];
+}NMEA;*/ // unused
+uint8_t NMEAStringReadyFlag = 0;
 /* Private function prototypes */
 void LCD_DisplayWholeString(uint8_t StartLine, char *ptr);
+void Init_UART1(void);
+void USART1_IRQHandler(void);
 /* Private functions */
 
 /**
@@ -61,43 +76,14 @@ int main(void)
 	LCD_Clear(LCD_COLOR_BLACK);
 	LCD_SetFont(&Font16x24);
 	LCD_SetColors(LCD_COLOR_GREEN,LCD_COLOR_BLACK);
+	/* Init UART1*/
+	Init_UART1();
 
-	/* Init GPIO Ports [PA9=TX, PA10=RX] for UART1 */
-	GPIO_InitTypeDef GPIO_InitStruct;
-	GPIO_StructInit(&GPIO_InitStruct);
-	GPIO_InitStruct.GPIO_Speed = GPIO_Speed_2MHz;
-	GPIO_InitStruct.GPIO_PuPd = GPIO_PuPd_UP;
-	GPIO_InitStruct.GPIO_Mode = GPIO_Mode_AF;
-	GPIO_InitStruct.GPIO_Pin = GPIO_Pin_9 | GPIO_Pin_10;
-	GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-	// Set USART1 Peripherial Clock Ressource
-	RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);
-
-	/* Init UART1 */
-	USART_DeInit(USART1);
-	// Init USART Clock
-	USART_ClockInitTypeDef USART1_ClockInit;
-	USART_ClockStructInit(&USART1_ClockInit);
-	USART_ClockInit(USART1, &USART1_ClockInit);
-	// Delete all content on the input buffer
-	int deadloopprev;
-	while ((USART_GetFlagStatus(USART1, USART_FLAG_RXNE ) == SET) &&
-		 (deadloopprev < 10000))
-	{
-	  USART_ReceiveData(USART1);
-	  deadloopprev++;
-	}
-	USART_Cmd(USART1, DISABLE);
-	USART_InitTypeDef USART1_Init;
-	USART_StructInit(&USART1_Init);
-	USART_Init(USART1, &USART1_Init);
-	USART_Cmd(USART1, ENABLE);
-
-	// init USART Values
-	char pc[144];
-	for( int i = 0; i < 144; i++) pc[i]=0;
-	uint8_t count = 143;
+	/* Init NMEA_string */
+	char NMEA_string[NMEA_stringlength];
+	// make sure NMEA_string is empty
+	for (int i = 0; i<=NMEA_stringlength-1; i++)
+		NMEA_string[i] = '\0';
 
 	/* Infinite loop */
 	while (1)
@@ -114,7 +100,7 @@ int main(void)
 		{
 			uint8_t NMEA_start = 0;
 			uint8_t sectionCount = 0;
-			for (int i = 0; (i<count)&&(sectionCount<7); i++ )
+			for (int i = 0; (i<NMEA_stringlength)&&(sectionCount<7); i++ )
 			{
 				uint16_t data_received;
 				if (USART_GetFlagStatus(USART1, USART_FLAG_RXNE ) == SET)
@@ -149,20 +135,95 @@ int main(void)
 			deadloopprev++;
 		}
 		deadloopprev = 0;
-		LCD_DisplayWholeString(0, pc);
+		NVIC_DisableIRQ(USART1_IRQn);
+		LCD_DisplayWholeString(0, NMEA_string);
+		NVIC_EnableIRQ(USART1_IRQn);
 	}
 }
 
-/*
- * Callback used by stm324xg_eval_i2c_ee.c.
- * Refer to stm324xg_eval_i2c_ee.h for more info.
- */
-uint32_t sEE_TIMEOUT_UserCallback(void)
+void Init_UART1(void)
 {
-  /* TODO, implement your code here */
-  while (1)
-  {
-  }
+	/* Init GPIO Ports [PA9=TX, PA10=RX] for UART1 */
+	GPIO_InitTypeDef GPIO_InitStruct;
+	GPIO_StructInit(&GPIO_InitStruct);
+	GPIO_InitStruct.GPIO_Speed = GPIO_Speed_2MHz;
+	GPIO_InitStruct.GPIO_PuPd = GPIO_PuPd_UP;
+	GPIO_InitStruct.GPIO_Mode = GPIO_Mode_AF;
+	GPIO_InitStruct.GPIO_Pin = GPIO_Pin_9 | GPIO_Pin_10;
+	GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+	// Set USART1 Peripherial Clock Ressource
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);
+
+	/* Init UART1 */
+	USART_DeInit(USART1);
+	// Init USART Clock
+	USART_ClockInitTypeDef USART1_ClockInit;
+	USART_ClockStructInit(&USART1_ClockInit);
+	USART_ClockInit(USART1, &USART1_ClockInit);
+	// Delete all content on the input buffer
+	int deadloopprev;
+	while ((USART_GetFlagStatus(USART1, USART_FLAG_RXNE ) == SET) &&
+		 (deadloopprev < 10000))
+	{
+	  USART_ReceiveData(USART1);
+	  deadloopprev++;
+	}
+	USART_Cmd(USART1, DISABLE);
+	USART_InitTypeDef USART1_Init;
+	USART_StructInit(&USART1_Init);
+	USART_Init(USART1, &USART1_Init);
+	// Enable UART1 Interrupts
+	USART_ITConfig(USART1, USART_IT_RXNE, ENABLE);
+	NVIC_InitTypeDef NVIC_InitStructure;
+	NVIC_InitStructure.NVIC_IRQChannel = USART1_IRQn;
+	//NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 10;// set priority of the USART1 interrupt to highest (lowest=15)
+	//NVIC_InitStructure.NVIC_IRQChannelSubPriority = 10;		 // set the subpriority inside the group to highest (lowest=15)
+	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;			 // enable the USART1 interrupts globally
+	NVIC_Init(&NVIC_InitStructure);
+	USART_Cmd(USART1, ENABLE);
+}
+
+void USART1_IRQHandler(void)
+{
+	// check if the USART1 receive interrupt flag was set
+	if( USART_GetITStatus(USART1, USART_IT_RXNE) )
+	{
+		static uint8_t cnt = 0; // this counter is used to determine the current string length
+		char t = USART1->DR;  // the character from the USART1 data register is saved in t
+		static uint8_t NMEA_start = 0;
+		if (cnt < NMEA_stringlength)
+		{
+			switch (t)
+			{
+				case '$':
+					if (cnt<2) cnt=0;
+					NMEA_start = 1;
+					break;
+				case '\r':
+					NMEA_start = 0;
+					break;
+				case '\n':
+					NMEA_start = 0;
+					break;
+				default:
+					break;
+			}
+			if(NMEA_start)
+			{
+				NMEA_string[cnt] = t;
+				cnt++;
+			}
+		}
+		else
+		{
+			NMEAStringReadyFlag = 1;
+			NMEA_string[cnt] = 0;
+			cnt=0;
+		}
+		USART_ClearITPendingBit(USART1, USART_IT_RXNE);
+	}
 }
 
 void LCD_DisplayWholeString(uint8_t StartLine, char *ptr)
@@ -180,4 +241,16 @@ void LCD_DisplayWholeString(uint8_t StartLine, char *ptr)
 		strncpy(LCDstring, Segment+=LineLength, LineLength);
 		StringLength -= LineLength;
 	}
+}
+
+/*
+ * Callback used by stm324xg_eval_i2c_ee.c.
+ * Refer to stm324xg_eval_i2c_ee.h for more info.
+ */
+uint32_t sEE_TIMEOUT_UserCallback(void)
+{
+  /* TODO, implement your code here */
+  while (1)
+  {
+  }
 }
